@@ -1,4 +1,12 @@
+"""
+mpiigaze_processor — разведочный анализ и предобработка аннотаций датасета MPIIGaze:
+загрузка, очистка, корреляции, кластеризация, распределения, выбросы,
+подготовка train/test для модели "поза головы -> точка взгляда на экране".
+"""
+
 import os
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -6,16 +14,19 @@ import seaborn as sns
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.cluster import KMeans
-import warnings
-warnings.filterwarnings('ignore')
 
 class MPIIGazeProcessor:
     """
     Класс для обработки данных MPIIGaze по требованиям конкурсного задания.
     """
     
-    def __init__(self, base_path='MPIIGaze'):
+    def __init__(self, base_path='MPIIGaze', output_dir='.'):
         self.base_path = base_path
+        # Все графики и отчёт пишутся сюда, а не в текущую папку процесса
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.scaler_X = None
+        self.scaler_y = None
         self.processed_data = None
         self.report_content = []
         
@@ -92,7 +103,7 @@ class MPIIGazeProcessor:
                    center=0, fmt='.2f', linewidths=0.5, square=True)
         plt.title('Матрица корреляций ключевых признаков')
         plt.tight_layout()
-        plt.savefig('correlation_matrix.png', dpi=100, bbox_inches='tight')
+        plt.savefig(self.output_dir / 'correlation_matrix.png', dpi=100, bbox_inches='tight')
         plt.close()
         
         # Анализ сильных корреляций
@@ -165,7 +176,7 @@ class MPIIGazeProcessor:
             axes[idx].set_visible(False)
         
         plt.tight_layout()
-        plt.savefig('scatter_plots.png', dpi=100, bbox_inches='tight')
+        plt.savefig(self.output_dir / 'scatter_plots.png', dpi=100, bbox_inches='tight')
         plt.close()
         
         self.report_content.append("\nДиаграммы рассеяния:")
@@ -218,12 +229,12 @@ class MPIIGazeProcessor:
         plt.title(f'Кластеризация данных (K-means, k={n_clusters})')
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
-        plt.savefig('clustering_result.png', dpi=100, bbox_inches='tight')
+        plt.savefig(self.output_dir / 'clustering_result.png', dpi=100, bbox_inches='tight')
         plt.close()
         
         # Анализ кластеров
-        df['cluster'] = clusters
-        cluster_stats = df.groupby('cluster')[available_features].mean()
+        # Работаем с копией: метод не должен молча добавлять колонку в DataFrame вызывающего кода
+        df = df.assign(cluster=clusters)
         
         self.report_content.append("\nКластеризация данных:")
         self.report_content.append(f"Метод: K-means с {n_clusters} кластерами")
@@ -306,7 +317,7 @@ class MPIIGazeProcessor:
             axes[idx].set_visible(False)
         
         plt.tight_layout()
-        plt.savefig('distributions.png', dpi=100, bbox_inches='tight')
+        plt.savefig(self.output_dir / 'distributions.png', dpi=100, bbox_inches='tight')
         plt.close()
         
         # Добавляем информацию в отчет
@@ -382,17 +393,18 @@ class MPIIGazeProcessor:
         X = df[available_features].values
         y = df[available_targets].values
         
-        # Нормализация
-        scaler_X = StandardScaler()
-        scaler_y = StandardScaler()
-        
-        X_scaled = scaler_X.fit_transform(X)
-        y_scaled = scaler_y.fit_transform(y)
-        
-        # Разделение на обучающую и тестовую выборки
+        # СНАЧАЛА разбиение, ПОТОМ нормализация.
+        # Если обучить StandardScaler на всех данных, его среднее и std
+        # содержат информацию о тесте — это утечка (data leakage), и оценка
+        # модели на тесте получается завышенной.
         X_train, X_test, y_train, y_test = train_test_split(
-            X_scaled, y_scaled, test_size=0.2, random_state=42
+            X, y, test_size=0.2, random_state=42
         )
+        
+        self.scaler_X = StandardScaler().fit(X_train)
+        self.scaler_y = StandardScaler().fit(y_train)  # нужен, чтобы вернуть предсказания в пиксели
+        X_train, X_test = self.scaler_X.transform(X_train), self.scaler_X.transform(X_test)
+        y_train, y_test = self.scaler_y.transform(y_train), self.scaler_y.transform(y_test)
         
         self.report_content.append("\nПодготовка данных для моделирования:")
         self.report_content.append(f"Признаки: {len(available_features)}")
@@ -404,7 +416,7 @@ class MPIIGazeProcessor:
     
     def save_report(self):
         """Сохранение отчета о проделанной работе (критерий А3)"""
-        report_path = 'report_A.md'
+        report_path = self.output_dir / 'report_A.md'
         
         # Создаем заголовок отчета
         full_report = ["# Отчет по модулю А: Анализ и предобработка данных", ""]
