@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+# датасет и результаты анализа
+MPIIGaze/
+*.png
+report_A.md
